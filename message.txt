@@ -1,0 +1,381 @@
+----------------------------------------
+EXPERIMENT 1: VPC USING NAT GATEWAY & BASTION HOST (WEEK 6)
+----------------------------------------
+AIM:
+
+Create a secure VPC with public and private subnets and enable internet access to private instances using a NAT Gateway and Bastion Host.
+
+SERVICES USED:
+
+Amazon VPC, EC2, Internet Gateway, NAT Gateway
+
+PREREQUISITES:
+AWS Account
+Region: ap-south-1
+Key pairs: bastion.pem, dbserver.pem
+ARCHITECTURE / FLOW:
+
+Internet → Bastion (Public Subnet) → Private EC2 → NAT Gateway
+
+PROCEDURE
+PART A: SETUP NETWORK
+
+Step 1: Go to AWS Console
+Step 2: Navigate to: Services → VPC → Create VPC
+
+Step 3: Configure:
+
+Name tag → MyVPC
+IPv4 CIDR → 10.0.0.0/16
+
+Click Create VPC
+
+Step 4: Create Subnets
+
+Navigate to: VPC → Subnets → Create subnet
+
+Create:
+
+Public Subnet
+Name → PublicSubnet
+CIDR → 10.0.1.0/24
+Private Subnet
+Name → PrivateSubnet
+CIDR → 10.0.2.0/24
+Step 5: Create Internet Gateway
+
+Navigate to: VPC → Internet Gateways → Create
+
+Name → MyIGW
+
+Attach to VPC → MyVPC
+
+Step 6: Configure Route Table (Public)
+
+Navigate: VPC → Route Tables → Create
+
+Name → PublicRT
+
+Edit routes:
+
+Destination → 0.0.0.0/0
+Target → Internet Gateway
+
+Associate with Public Subnet
+
+PART B: NAT GATEWAY
+
+Step 7: Navigate: VPC → NAT Gateways → Create
+
+Configure:
+
+Name → MyNAT
+Subnet → PublicSubnet
+Elastic IP → Allocate
+
+Click Create
+
+Step 8: Private Route Table
+Create Route Table → PrivateRT
+Add route:
+0.0.0.0/0 → NAT Gateway
+Associate with PrivateSubnet
+PART C: EC2 INSTANCES
+
+Step 9: Launch Bastion Server
+
+Navigate: EC2 → Launch Instance
+
+Configure:
+
+Name → Bastion
+AMI → Ubuntu
+Subnet → PublicSubnet
+Auto-assign public IP → Enable
+Key pair → bastion.pem
+
+Step 10: Launch Private Server
+
+Name → DBServer
+Subnet → PrivateSubnet
+No public IP
+Key pair → dbserver.pem
+PART D: CONNECTIVITY
+ssh -i bastion.pem ubuntu@<Bastion_Public_IP>
+scp -i bastion.pem dbserver.pem ubuntu@<Bastion_Public_IP>:/home/ubuntu/
+ssh -i dbserver.pem ubuntu@10.0.2.x
+NETWORK DETAILS:
+VPC → 10.0.0.0/16
+Public → 10.0.1.0/24
+Private → 10.0.2.0/24
+IGW → Public
+NAT → Private
+TESTING / VERIFICATION
+SSH into Bastion → success
+SSH into private instance → success
+Run:
+ping google.com
+
+✔ Internet works via NAT
+
+RESULT:
+
+Private EC2 instance accesses internet securely via NAT Gateway.
+
+COMMON ERRORS:
+NAT in private subnet → wrong
+Missing route → no internet
+Security group blocking SSH
+----------------------------------------
+EXPERIMENT 2: S3 → LAMBDA → DYNAMODB (WEEK 7)
+----------------------------------------
+AIM:
+
+Trigger Lambda on S3 upload and store details in DynamoDB.
+
+SERVICES:
+
+S3, Lambda, DynamoDB, IAM
+
+FLOW:
+
+S3 → Lambda → DynamoDB
+
+PROCEDURE
+PART A: CREATE S3 BUCKET
+
+Navigate: Services → S3 → Create bucket
+
+Name → my-lambda-bucket-123
+Region → ap-south-1
+Enable Versioning
+PART B: CREATE DYNAMODB
+Table → Newtable
+Partition key → id (String)
+PART C: CREATE LAMBDA
+
+Navigate: Lambda → Create function
+
+Name → S3TriggerFunction
+Runtime → Python 3.x
+Role → Create new role
+PART D: ADD TRIGGER
+Add trigger → S3
+Event → All object create events
+Select bucket
+PART E: CODE
+
+LANGUAGE: Python
+
+import boto3
+from uuid import uuid4
+
+def lambda_handler(event, context):
+
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table('Newtable')
+
+    if 'Records' in event:
+        for record in event['Records']:
+
+            bucket_name = record['s3']['bucket']['name']
+            object_key = record['s3']['object']['key']
+            size = record['s3']['object'].get('size', -1)
+            event_name = record.get('eventName', 'Unknown')
+            event_time = record.get('eventTime', 'Unknown')
+
+            table.put_item(
+                Item={
+                    'private': str(uuid4()),
+                    'Bucket': bucket_name,
+                    'Object': object_key,
+                    'Size': size,
+                    'Event': event_name,
+                    'EventTime': event_time
+                }
+            )
+
+    return {
+        'statusCode': 200,
+        'body': 'Data stored in DynamoDB'
+    }PART F: IAM POLICY (IF REQUIRED)
+
+LANGUAGE: JSON
+
+{
+  "Effect": "Allow",
+  "Action": "dynamodb:PutItem",
+  "Resource": "arn:aws:dynamodb:ap-south-1:<ACCOUNT-ID>:table/Newtable"
+}
+TESTING
+Upload file → S3
+Check DynamoDB → record added
+RESULT:
+
+Lambda successfully stores S3 event data in DynamoDB.
+
+----------------------------------------
+EXPERIMENT 3: SNS + SQS + S3 EVENT (WEEK 8)
+----------------------------------------
+AIM:
+
+Implement S3 event-driven messaging using SNS and SQS.
+
+SERVICES:
+
+S3, SNS, SQS, Lambda
+
+FLOW:
+
+S3 → SNS → SQS → Lambda
+
+PROCEDURE
+PART A: SNS
+
+Navigate: SNS → Create topic
+
+Name → MyS3SNSTopic
+PART B: SQS
+
+Navigate: SQS → Create queue
+
+Name → MyS3Queue
+PART C: SUBSCRIBE
+
+SNS → Create subscription:
+
+Protocol → SQS
+Endpoint → MyS3Queue
+PART D: SQS POLICY
+
+LANGUAGE: JSON
+
+{
+  "Effect": "Allow",
+  "Principal": {"Service": "sns.amazonaws.com"},
+  "Action": "sqs:SendMessage",
+  "Resource": "SQS ARN",
+  "Condition": {
+    "ArnEquals": {"aws:SourceArn": "SNS ARN"}
+  }
+}
+PART E: SNS POLICY
+
+LANGUAGE: JSON
+
+{
+  "Effect": "Allow",
+  "Principal": {"Service": "s3.amazonaws.com"},
+  "Action": "SNS:Publish",
+  "Resource": "SNS ARN"
+}
+PART F: S3 EVENT
+Bucket → Properties → Event notification
+Event → Object create
+Destination → SNS
+TESTING
+Upload file → S3
+Check SQS → message appears
+RESULT:
+
+Event-driven architecture works.
+
+----------------------------------------
+EXPERIMENT 4: ELB + AUTO SCALING (WEEK 9)
+----------------------------------------
+AIM:
+
+Distribute traffic using ALB and Auto Scaling.
+
+FLOW:
+
+User → ALB → EC2 → ASG
+
+PROCEDURE
+PART A: EC2 SETUP
+yum update -y
+yum install httpd -y
+systemctl start httpd
+echo "Server 1" > /var/www/html/index.html
+PART B: LOAD BALANCER
+EC2 → Load Balancer → Create ALB
+Listener → HTTP:80
+Subnets → Select 2
+PART C: TARGET GROUP
+Type → Instance
+Register instances
+PART D: ASG
+Launch Template → use AMI
+Min → 1
+Desired → 2
+Max → 4
+TESTING
+Open ALB DNS
+Refresh → different servers
+RESULT:
+
+Traffic distributed dynamically.
+
+----------------------------------------
+EXPERIMENT 5: ELASTIC BEANSTALK (WEEK 10)
+----------------------------------------
+AIM:
+
+Deploy web app using Elastic Beanstalk.
+
+PROCEDURE
+Create Application
+Create Environment
+Platform → Java
+Upload .war
+RESULT:
+
+App accessible via URL.
+
+----------------------------------------
+EXPERIMENT 6: AMAZON LEX (WEEK 11)
+----------------------------------------
+AIM:
+
+Create chatbot using Amazon Lex.
+
+PROCEDURE
+Create bot → HotelBookingBot
+Create intent → BookHotel
+Add slots → age, location, nights
+RESULT:
+
+Chatbot responds correctly.
+
+----------------------------------------
+EXPERIMENT 7: IAM USER & CLI (WEEK 12)
+----------------------------------------
+AIM:
+
+Create IAM user and test CLI.
+
+PROCEDURE
+IAM → Create user
+Attach S3 policy
+Create access key
+aws configure
+aws s3 ls
+RESULT:
+
+CLI access works.
+
+----------------------------------------
+EXPERIMENT 8: IAM ROLE (WEEK 13)
+----------------------------------------
+AIM:
+
+Attach IAM role to EC2 for S3 access.
+
+PROCEDURE
+IAM → Create role → EC2
+Attach S3FullAccess
+Attach to EC2
+aws s3 ls
+RESULT:
+
+EC2 accesses S3 without credentials.
